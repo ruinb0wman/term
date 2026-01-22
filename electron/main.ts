@@ -2,19 +2,14 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { pluginManager } from './plugin_manager';
+import { usePluginManager } from './plugin_manager';
 
 let mainWindow: BrowserWindow | null = null;
+const pluginManager = usePluginManager();
 
 async function createWindow() {
   await pluginManager.loadAllPlugins();
-
-  // 👇 关键：await 启用插件
-  for (const manifest of pluginManager.getAllManifests()) {
-    if (manifest.enabled) {
-      await pluginManager.enablePlugin(manifest.id); // ← 加了 await
-    }
-  }
+  await pluginManager.enableAllPlugins();
 
   // 使用 fileURLToPath 替代 __dirname
   const __filename = fileURLToPath(import.meta.url);
@@ -36,32 +31,7 @@ async function createWindow() {
   }
 }
 
-// IPC: 调用插件方法
-ipcMain.handle('PLUGIN:invoke', async (_e, pluginId: string, method: string, ...args: any[]) => {
-  const plugin = pluginManager.getActivePlugin(pluginId);
-  // console.log('[main:plugin]', plugin?.mainModule?.ipcMethods);
-  if (!plugin?.mainModule?.ipcMethods) {
-    throw new Error(`Plugin ${pluginId} not active or has no ipcMethods`);
-  }
-
-  const handler = plugin.mainModule.ipcMethods[method];
-  if (!handler) {
-    throw new Error(`Method ${method} not found in plugin ${pluginId}`);
-  }
-
-  try {
-    const result = await handler(...args);
-    return { success: true, result };
-  } catch (err: any) {
-    return { success: false, error: err.message };
-  }
-});
-
-// 获取插件列表 & 渲染器路径
-ipcMain.handle('PLUGIN:list', () => pluginManager.getAllManifests());
-ipcMain.handle('PLUGIN:get-renderer-path', (_e, id: string) => {
-  return pluginManager.getRendererPath(id);
-});
+pluginManager.enablePluginIPC()
 
 app.whenReady().then(createWindow);
 

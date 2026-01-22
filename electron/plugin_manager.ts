@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { pathToFileURL } from 'url';
-
+import { ipcMain } from 'electron';
 
 export interface PluginManifest {
   id: string;
@@ -21,86 +21,134 @@ export interface LoadedPlugin {
   isActive: boolean;
 }
 
-class PluginManager {
-  private pluginsDir: string;
-  private plugins = new Map<string, LoadedPlugin>();
+// 私有状态（闭包）
+const pluginsDir = path.join(app.getAppPath(), 'plugins');
+const plugins = new Map<string, LoadedPlugin>();
 
-  constructor() {
-    this.pluginsDir = path.join(app.getAppPath(), 'plugins');
-  }
+export function usePluginManager() {
+  // 内部工具函数
+  function readPluginManifest(pluginPath: string): PluginManifest | null {
+    const manifestPath = path.join(pluginPath, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) return null;
 
-  async loadAllPlugins() {
-    console.log('pluginsDir', this.pluginsDir)
-    if (!fs.existsSync(this.pluginsDir)) return;
-
-    const dirs = fs.readdirSync(this.pluginsDir, { withFileTypes: true });
-    for (const dir of dirs) {
-      if (dir.isDirectory()) {
-        const pluginPath = path.join(this.pluginsDir, dir.name);
-        const manifestPath = path.join(pluginPath, 'manifest.json');
-
-        if (fs.existsSync(manifestPath)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as PluginManifest;
-            this.plugins.set(manifest.id, {
-              manifest,
-              basePath: pluginPath,
-              isActive: false,
-            });
-          } catch (e) {
-            console.error(`Failed to load plugin ${dir.name}`, e);
-          }
-        }
-      }
+    try {
+      return JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as PluginManifest;
+    } catch (e) {
+      console.error(`Failed to parse manifest in ${pluginPath}`, e);
+      return null;
     }
-    console.log('[plugin_manager:loadAllPlugins]', this.plugins)
   }
 
-  async enablePlugin(pluginId: string) {
-    const plugin = this.plugins.get(pluginId);
-    if (!plugin || plugin.isActive) return;
+  async function loadPluginMainModule(plugin: LoadedPlugin) {
+    if (!plugin.manifest.main) return plugin;
 
-    if (plugin.manifest.main) {
-      const mainPath = path.resolve(plugin.basePath, plugin.manifest.main);
-      let mainModule;
-
-      try {
-        // 转为 file URL（ESM 必须）
-        const url = pathToFileURL(mainPath).href;
-        const imported = await import(url);
-        console.log('[plugin_manager:enablePlugin]', imported)
-        // 兼容 CommonJS (exports.default) 和 ESM
-        mainModule = imported.default || imported;
-      } catch (err) {
-        console.error(`[Plugin] Failed to load main module: ${mainPath}`, err);
-        throw err;
-      }
+    const mainPath = path.resolve(plugin.basePath, plugin.manifest.main);
+    try {
+      const url = pathToFileURL(mainPath).href;
+      const imported = await import(url);
+      const mainModule = imported.default || imported;
 
       if (typeof mainModule.activate === 'function') {
         mainModule.activate({ pluginPath: plugin.basePath });
       }
 
-      plugin.mainModule = mainModule;
+      return { ...plugin, mainModule };
+    } catch (err) {
+      console.error(`[Plugin] Failed to load main module: ${mainPath}`, err);
+      throw err;
+    }
+  }
+
+  // 公共 API 函数
+  async function loadAllPlugins() {
+    console.log('pluginsDir', pluginsDir);
+    if (!fs.existsSync(pluginsDir)) return;
+
+    const dirs = fs.readdirSync(pluginsDir, { withFileTypes: true });
+    for (const dir of dirs) {
+      if (dir.isDirectory()) {
+        const pluginPath = path.join(pluginsDir, dir.name);
+        const manifest = readPluginManifest(pluginPath);
+        if (manifest) {
+          plugins.set(manifest.id, {
+            manifest,
+            basePath: pluginPath,
+            isActive: false,
+          });
+        }
+      }
+    }
+    console.log('[plugin_manager:loadAllPlugins]', plugins);
+  }
+
+  async function enablePlugin(pluginId: string) {
+    const plugin = plugins.get(pluginId);
+    if (!plugin || plugin.isActive) return plugin;
+
+    let updatedPlugin = plugin;
+    if (plugin.manifest.main) {
+      updatedPlugin = await loadPluginMainModule(plugin);
+      plugins.set(pluginId, updatedPlugin);
     }
 
-    plugin.isActive = true;
-    return plugin;
+    // 标记为激活
+    const activePlugin = { ...updatedPlugin, isActive: true };
+    plugins.set(pluginId, activePlugin);
+
+    return activePlugin;
   }
 
-  getActivePlugin(id: string) {
-    const p = this.plugins.get(id);
-    return p?.isActive ? p : null;
+  function getActivePlugin(id: string): LoadedPlugin | null {
+    const p = plugins.get(id);
+    return p && p.isActive ? p : null;
   }
 
-  getAllManifests() {
-    return Array.from(this.plugins.values()).map(p => p.manifest);
+  function getAllManifests(): PluginManifest[] {
+    return Array.from(plugins.values()).map(p => p.manifest);
   }
 
-  getRendererPath(pluginId: string) {
-    const plugin = this.plugins.get(pluginId);
+  function getRendererPath(pluginId: string): string | null {
+    const plugin = plugins.get(pluginId);
     if (!plugin || !plugin.manifest.renderer) return null;
     return `/plugins/${pluginId}/${plugin.manifest.renderer}`;
   }
-}
 
-export const pluginManager = new PluginManager();
+  async function enableAllPlugins() {
+    for (const manifest of getAllManifests()) {
+      if (manifest.enabled) {
+        await enablePlugin(manifest.id); // ← 加了 await
+      }
+    }
+  }
+
+  function enablePluginIPC() {
+    // IPC: 调用插件方法
+    ipcMain.handle('PLUGIN:invoke', async (_e, pluginId: string, method: string, ...args: any[]) => {
+      const plugin = getActivePlugin(pluginId);
+      // console.log('[main:plugin]', plugin?.mainModule?.ipcMethods);
+      if (!plugin?.mainModule?.ipcMethods) {
+        throw new Error(`Plugin ${pluginId} not active or has no ipcMethods`);
+      }
+
+      const handler = plugin.mainModule.ipcMethods[method];
+      if (!handler) {
+        throw new Error(`Method ${method} not found in plugin ${pluginId}`);
+      }
+
+      try {
+        const result = await handler(...args);
+        return { success: true, result };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    });
+
+    // 获取插件列表 & 渲染器路径
+    ipcMain.handle('PLUGIN:list', () => getAllManifests());
+    ipcMain.handle('PLUGIN:get-renderer-path', (_e, id: string) => {
+      return getRendererPath(id);
+    });
+  }
+
+  return { enablePlugin, getActivePlugin, getAllManifests, getRendererPath, loadAllPlugins, enableAllPlugins, enablePluginIPC }
+}
