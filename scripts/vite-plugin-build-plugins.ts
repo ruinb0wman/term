@@ -29,7 +29,7 @@ async function buildMain(entry: string, outfile: string) {
     outfile,
     bundle: false,          // 不打包
     platform: 'node',
-    format: 'cjs',          // 主进程用 CommonJS
+    format: 'esm',          // 主进程用 ESM
     target: 'node18',
     sourcemap: true,
   });

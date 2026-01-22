@@ -39,6 +39,7 @@ async function createWindow() {
 // IPC: 调用插件方法
 ipcMain.handle('PLUGIN:invoke', async (_e, pluginId: string, method: string, ...args: any[]) => {
   const plugin = pluginManager.getActivePlugin(pluginId);
+  // console.log('[main:plugin]', plugin?.mainModule?.ipcMethods);
   if (!plugin?.mainModule?.ipcMethods) {
     throw new Error(`Plugin ${pluginId} not active or has no ipcMethods`);
   }

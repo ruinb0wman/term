@@ -9,3 +9,7 @@
 - `main.ts` 插件主进程入口
 - `manifest.json` 插件元数据
 - `package.json` 插件依赖等信息
+
+## scripts
+
+项目使用`scripts/vite-plugin-build-plugins.ts`来自动编译插件代码

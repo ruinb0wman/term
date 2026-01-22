@@ -53,6 +53,7 @@ class PluginManager {
         }
       }
     }
+    console.log('[plugin_manager:loadAllPlugins]', this.plugins)
   }
 
   async enablePlugin(pluginId: string) {
@@ -67,6 +68,7 @@ class PluginManager {
         // 转为 file URL（ESM 必须）
         const url = pathToFileURL(mainPath).href;
         const imported = await import(url);
+        console.log('[plugin_manager:enablePlugin]', imported)
         // 兼容 CommonJS (exports.default) 和 ESM
         mainModule = imported.default || imported;
       } catch (err) {

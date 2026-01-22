@@ -2,8 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // 插件 API
 contextBridge.exposeInMainWorld('pluginAPI', {
-  invoke: (pluginId: string, method: string, ...args: any[]) =>
-    ipcRenderer.invoke('PLUGIN:invoke', pluginId, method, ...args),
+  invoke: (pluginId: string, method: string, ...args: any[]) => {
+    console.log('[pluginAPI]', pluginId, method, args);
+    return ipcRenderer.invoke('PLUGIN:invoke', pluginId, method, ...args)
+  },
 
   on: (pluginId: string, event: string, listener: (payload: any) => void) => {
     const channel = `plugin:event:${pluginId}:${event}`;
