@@ -1,0 +1,3 @@
+[submodule "plugins/terminal"]
+	path = plugins/terminal
+	url = https://github.com/ruinb0wman/term-terminal.git
